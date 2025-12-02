@@ -21,8 +21,8 @@ options: Options,
 decoder: *c.FLAC__StreamDecoder,
 encoder: *c.FLAC__StreamEncoder,
 
-allocator: std.mem.Allocator,
 chunk: ?[]c.FLAC__int32 = null,
+coefficients: []f64,
 
 pub fn init(allocator: std.mem.Allocator, options: Options) !Self {
     var ok = c.true;
@@ -39,19 +39,27 @@ pub fn init(allocator: std.mem.Allocator, options: Options) !Self {
     ok = c.FLAC__stream_encoder_set_metadata(encoder, @ptrCast(metadata), @intCast(metadata.len));
     std.debug.assert(ok == c.true);
 
+    const source_sample_rate = stream_info.sample_rate;
+    const target_sample_rate = stream_info.sample_rate / 2;
+
     ok &= c.FLAC__stream_encoder_set_verify(encoder, 1);
     ok &= c.FLAC__stream_encoder_set_compression_level(encoder, 4);
     ok &= c.FLAC__stream_encoder_set_channels(encoder, stream_info.channels);
     ok &= c.FLAC__stream_encoder_set_bits_per_sample(encoder, stream_info.bits_per_sample);
-    ok &= c.FLAC__stream_encoder_set_sample_rate(encoder, stream_info.sample_rate / 2);
+    ok &= c.FLAC__stream_encoder_set_sample_rate(encoder, target_sample_rate);
     ok &= c.FLAC__stream_encoder_set_total_samples_estimate(encoder, stream_info.total_samples / 2);
     std.debug.assert(ok == c.true);
 
+
+    const taps = 63;
+    const target_nyquist = target_sample_rate / 2;
+    const coefficients = try designFirLowpassAlloc(allocator, taps, target_nyquist, source_sample_rate);
+
     return .{
-        .allocator = allocator,
         .options = options,
         .decoder = decoder.?,
         .encoder = encoder.?,
+        .coefficients = coefficients,
     };
 }
 
@@ -102,6 +110,53 @@ pub fn run(self: *Self) !void {
     std.debug.assert(ok == c.true);
 }
 
+fn sinc(x: f64) f64 {
+    if (x == 0.0) return 1.0;
+    return @sin(@as(f64, std.math.pi) * x) / (@as(f64, std.math.pi) * x);
+}
+
+fn designFirLowpassAlloc(
+    allocator: std.mem.Allocator,
+    taps_count: usize,
+    cutoff_frequency_int: u32,
+    sample_rate_int: u32
+) ![]f64 {
+    const cutoff_frequency: f64 = @floatFromInt(cutoff_frequency_int);
+    const sample_rate: f64 = @floatFromInt(sample_rate_int);
+
+    const M: f64 = @floatFromInt(taps_count - 1);
+    var coefficients = try allocator.alloc(f64, taps_count);
+
+    const normalized_cutoff = cutoff_frequency / (sample_rate / 2.0);
+
+    var sum: f64 = 0.0;
+    for (0..coefficients.len) |n_int| {
+        const n = @as(f64, @floatFromInt(n_int));
+        const h = sinc(normalized_cutoff * (n - M / 2.0));
+        const w = 0.54 - 0.46 * @cos(2.0 * std.math.pi * n / M); // Hamming window
+        const val = h * w;
+        coefficients[n_int] = val;
+        sum += val;
+    }
+
+    for (coefficients) |*f| f.* /= sum;
+    return coefficients;
+}
+
+fn applyFirFilter(signal: []const i32, output: []i32, coefficients: []f64) void {
+    for (0..signal.len) |signal_i| {
+        var accumulator: f64 = 0.0;
+        for (0..coefficients.len) |coefficients_i| {
+            if (signal_i >= coefficients_i) {
+                const sample: f64 = @floatFromInt(signal[signal_i - coefficients_i]);
+                accumulator +=  coefficients[coefficients_i] * sample;
+            }
+        }
+        const int_result: i32 = @intFromFloat(accumulator);
+        output[signal_i] = std.math.clamp(int_result, std.math.minInt(i24), std.math.maxInt(i24));
+    }
+}
+
 fn decoder_write_callback(
     _: [*c]const c.FLAC__StreamDecoder,
     frame:  [*c]const c.FLAC__Frame,
@@ -110,22 +165,38 @@ fn decoder_write_callback(
 ) callconv(.c) c.FLAC__StreamDecoderWriteStatus {
     const self: *Self = @alignCast(@ptrCast(client_data.?));
 
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
     const header = frame.*.header;
 
-    if (self.chunk == null) {
-        // TODO: move this into initialization
-        self.chunk = self.allocator.alloc(c.FLAC__int32, header.blocksize * 2) catch {
-            return c.FLAC__STREAM_DECODER_WRITE_STATUS_ABORT;
-        };
-    }
+    const abort = c.FLAC__STREAM_DECODER_WRITE_STATUS_ABORT;
 
-    var chunk = self.chunk.?;
+    // TODO: move this into initialization and only allocate once
+    var chunk = allocator.alloc(c.FLAC__int32, header.blocksize) catch {
+        return c.FLAC__STREAM_DECODER_WRITE_STATUS_ABORT;
+    };
 
     const channels: usize = 2; // TODO: Get from the source file
+
+    var filtered_buffer = allocator.alloc([]c.FLAC__int32, channels) catch return abort;
+    filtered_buffer[0] = allocator.alloc(c.FLAC__int32, header.blocksize) catch return abort;
+    filtered_buffer[1] = allocator.alloc(c.FLAC__int32, header.blocksize) catch return abort;
+
+    for (0..channels) |channel| {
+        applyFirFilter(
+            buffer[channel][0..header.blocksize],
+            filtered_buffer[channel][0..header.blocksize],
+            self.coefficients
+        );
+    }
+
     var filled: usize = 0;
     for (0..header.blocksize) |i| {
         if (i % 2 == 0) continue;
-        for (0..channels) |channel| chunk[filled * 2 + channel] = buffer[channel][i];
+        for (0..channels) |channel| chunk[filled * 2 + channel] = filtered_buffer[channel][i];
         filled += 1;
     }
 
