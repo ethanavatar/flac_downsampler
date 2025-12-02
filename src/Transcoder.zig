@@ -43,8 +43,8 @@ pub fn init(allocator: std.mem.Allocator, options: Options) !Self {
     ok &= c.FLAC__stream_encoder_set_compression_level(encoder, 4);
     ok &= c.FLAC__stream_encoder_set_channels(encoder, stream_info.channels);
     ok &= c.FLAC__stream_encoder_set_bits_per_sample(encoder, stream_info.bits_per_sample);
-    ok &= c.FLAC__stream_encoder_set_sample_rate(encoder, stream_info.sample_rate);
-    ok &= c.FLAC__stream_encoder_set_total_samples_estimate(encoder, stream_info.total_samples);
+    ok &= c.FLAC__stream_encoder_set_sample_rate(encoder, stream_info.sample_rate / 2);
+    ok &= c.FLAC__stream_encoder_set_total_samples_estimate(encoder, stream_info.total_samples / 2);
     std.debug.assert(ok == c.true);
 
     return .{
@@ -113,6 +113,7 @@ fn decoder_write_callback(
     const header = frame.*.header;
 
     if (self.chunk == null) {
+        // TODO: move this into initialization
         self.chunk = self.allocator.alloc(c.FLAC__int32, header.blocksize * 2) catch {
             return c.FLAC__STREAM_DECODER_WRITE_STATUS_ABORT;
         };
@@ -121,14 +122,17 @@ fn decoder_write_callback(
     var chunk = self.chunk.?;
 
     const channels: usize = 2; // TODO: Get from the source file
+    var filled: usize = 0;
     for (0..header.blocksize) |i| {
-        for (0..channels) |channel| chunk[i * 2 + channel] = buffer[channel][i];
+        if (i % 2 == 0) continue;
+        for (0..channels) |channel| chunk[filled * 2 + channel] = buffer[channel][i];
+        filled += 1;
     }
 
     _ = c.FLAC__stream_encoder_process_interleaved(
         self.encoder,
         @ptrCast(chunk),
-        header.blocksize
+        @intCast(filled)
     );
 
     return c.FLAC__STREAM_DECODER_WRITE_STATUS_CONTINUE;

@@ -11,7 +11,7 @@ pub fn main() !void {
     const allocator = arena.allocator();
 
     var transcoder = try Transcoder.init(allocator, .{
-        .in_file = in_file,
+        .in_file  = in_file,
         .out_file = out_file,
     });
     defer transcoder.deinit();
