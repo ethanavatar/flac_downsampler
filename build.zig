@@ -70,12 +70,20 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    const deunicode = b.dependency("deunicode", .{
+        .target   = target,
+        .optimize = optimize
+    });
+
     const exe = b.addExecutable(.{
         .name = "flac_downsampler",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
-            .target = target,
+            .target   = target,
             .optimize = optimize,
+            .imports  = &.{
+                .{ .name = "deunicode", .module = deunicode.module("deunicode") },
+            },
         }),
     });
 
