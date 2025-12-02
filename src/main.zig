@@ -22,7 +22,14 @@ pub fn main() !void {
     if (encoder == null) return error.CreateEncoder;
     defer flac.FLAC__stream_encoder_delete(encoder);
 
-    var transcoder: Transcoder = .{ .decoder = decoder.?, .encoder = encoder.?, };
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    var transcoder: Transcoder = .{
+        .decoder = decoder.?,
+        .encoder = encoder.?,
+        .allocator = arena.allocator(),
+    };
     const init_status = flac.FLAC__stream_decoder_init_file(
         decoder, in_file,
         decoder_write_callback, decoder_metadata_callback, decoder_error_callback,
@@ -53,6 +60,8 @@ const Transcoder = struct {
     decoder: *flac.FLAC__StreamDecoder,
     encoder: *flac.FLAC__StreamEncoder,
 
+    allocator: std.mem.Allocator,
+
     target_sample_rate:     ?u32 = null,
     target_bits_per_sample: ?u32 = null,
 };
@@ -65,7 +74,17 @@ fn decoder_write_callback(
 ) callconv(.c) flac.FLAC__StreamDecoderWriteStatus {
     const self: *Transcoder = @alignCast(@ptrCast(client_data.?));
     _ = decoder;
-    _ = flac.FLAC__stream_encoder_process(self.encoder, buffer, frame.*.header.blocksize);
+
+    const header = frame.*.header;
+    var chunk = self.allocator.alloc(flac.FLAC__int32, header.blocksize * 2) catch {
+        return flac.FLAC__STREAM_DECODER_WRITE_STATUS_ABORT;
+    };
+    defer self.allocator.free(chunk);
+
+    @memcpy(chunk[0..header.blocksize], buffer[0]);
+    @memcpy(chunk[header.blocksize..header.blocksize*2], buffer[1]);
+
+    _ = flac.FLAC__stream_encoder_process_interleaved(self.encoder, @ptrCast(chunk), header.blocksize);
     return flac.FLAC__STREAM_DECODER_WRITE_STATUS_CONTINUE;
 }
 
