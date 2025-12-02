@@ -81,10 +81,17 @@ fn decoder_write_callback(
     };
     defer self.allocator.free(chunk);
 
-    @memcpy(chunk[0..header.blocksize], buffer[0]);
-    @memcpy(chunk[header.blocksize..header.blocksize*2], buffer[1]);
+    const channels: usize = 2; // TODO: Get from the source file
+    for (0..header.blocksize) |i| {
+        for (0..channels) |c| chunk[i * 2 + c] = buffer[c][i];
+    }
 
-    _ = flac.FLAC__stream_encoder_process_interleaved(self.encoder, @ptrCast(chunk), header.blocksize);
+    _ = flac.FLAC__stream_encoder_process_interleaved(
+        self.encoder,
+        @ptrCast(chunk),
+        header.blocksize
+    );
+
     return flac.FLAC__STREAM_DECODER_WRITE_STATUS_CONTINUE;
 }
 
