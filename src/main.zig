@@ -8,9 +8,10 @@ const flac = @cImport({
     @cInclude("FLAC/stream_encoder.h");
 });
 
+const in_file  = "Men I Trust - Equus Caballus/Men I Trust - Equus Caballus - 01 To Ease You.flac";
+const out_file = "Men I Trust - Equus Caballus - 01 To Ease You.flac";
+
 pub fn main() !void {
-    const in_file  = "Men I Trust - Equus Caballus/Men I Trust - Equus Caballus - 01 To Ease You.flac";
-    const out_file = "Men I Trust - Equus Caballus - 01 To Ease You.flac";
 
     const decoder: ?*flac.FLAC__StreamDecoder = flac.FLAC__stream_decoder_new();
     if (decoder == null) return error.CreateDecoder;
@@ -21,10 +22,8 @@ pub fn main() !void {
     if (encoder == null) return error.CreateEncoder;
     defer flac.FLAC__stream_encoder_delete(encoder);
 
-
     var transcoder: Transcoder = .{ .decoder = decoder.?, .encoder = encoder.?, };
-
-    var init_status = flac.FLAC__stream_decoder_init_file(
+    const init_status = flac.FLAC__stream_decoder_init_file(
         decoder, in_file,
         decoder_write_callback, decoder_metadata_callback, decoder_error_callback,
         &transcoder
@@ -36,21 +35,11 @@ pub fn main() !void {
         return error.InitDecoder;
     }
 
-    init_status = flac.FLAC__stream_encoder_init_file(
-        encoder, out_file,
-        encoder_progress_callback,
-        &transcoder
-    );
-
-    if (init_status != flac.FLAC__STREAM_ENCODER_INIT_STATUS_OK) {
-        const msg = flac.FLAC__StreamEncoderInitStatusString[init_status];
-        std.debug.print("{s}\n", .{ msg });
-        return error.InitEncoder;
-    }
-
     var ok: flac.FLAC__bool = 1;
     ok = flac.FLAC__stream_decoder_process_until_end_of_stream(decoder);
     std.debug.assert(ok == 1);
+
+    std.debug.print("\n", .{ });
 
     const state = flac.FLAC__stream_encoder_get_state(encoder);
     std.debug.print("\tstate: {s}\n", .{ flac.FLAC__StreamEncoderStateString[state] });
@@ -64,7 +53,6 @@ const Transcoder = struct {
     decoder: *flac.FLAC__StreamDecoder,
     encoder: *flac.FLAC__StreamEncoder,
 
-
     target_sample_rate:     ?u32 = null,
     target_bits_per_sample: ?u32 = null,
 };
@@ -77,10 +65,7 @@ fn decoder_write_callback(
 ) callconv(.c) flac.FLAC__StreamDecoderWriteStatus {
     const self: *Transcoder = @alignCast(@ptrCast(client_data.?));
     _ = decoder;
-
-    const header = frame.*.header;
-    _ = flac.FLAC__stream_encoder_process(self.encoder, buffer, header.blocksize);
-
+    _ = flac.FLAC__stream_encoder_process(self.encoder, buffer, frame.*.header.blocksize);
     return flac.FLAC__STREAM_DECODER_WRITE_STATUS_CONTINUE;
 }
 
@@ -105,12 +90,24 @@ fn decoder_metadata_callback(
         std.debug.print("total samples  : {}\n",    .{ total_samples });
 
         var ok: flac.FLAC__bool = 1;
-        ok = flac.FLAC__stream_encoder_set_verify(self.encoder, 1);
-        ok = flac.FLAC__stream_encoder_set_compression_level(self.encoder, 5);
-        ok = flac.FLAC__stream_encoder_set_channels(self.encoder, channels);
-        ok = flac.FLAC__stream_encoder_set_bits_per_sample(self.encoder, bits_per_sample);
-        ok = flac.FLAC__stream_encoder_set_sample_rate(self.encoder, sample_rate);
-        ok = flac.FLAC__stream_encoder_set_total_samples_estimate(self.encoder, total_samples);
+        ok &= flac.FLAC__stream_encoder_set_verify(self.encoder, 1);
+        ok &= flac.FLAC__stream_encoder_set_compression_level(self.encoder, 4);
+        ok &= flac.FLAC__stream_encoder_set_channels(self.encoder, channels);
+        ok &= flac.FLAC__stream_encoder_set_bits_per_sample(self.encoder, bits_per_sample);
+        ok &= flac.FLAC__stream_encoder_set_sample_rate(self.encoder, sample_rate);
+        ok &= flac.FLAC__stream_encoder_set_total_samples_estimate(self.encoder, total_samples);
+
+        const init_status = flac.FLAC__stream_encoder_init_file(
+            self.encoder, out_file,
+            encoder_progress_callback,
+            self
+        );
+
+        if (init_status != flac.FLAC__STREAM_ENCODER_INIT_STATUS_OK) {
+            const msg = flac.FLAC__StreamEncoderInitStatusString[init_status];
+            std.debug.print("{s}\n", .{ msg });
+            @panic("failed to init encoder");
+        }
 
         const state = flac.FLAC__stream_encoder_get_state(self.encoder);
         std.debug.print("\tstate: {s}\n", .{ flac.FLAC__StreamEncoderStateString[state] });
@@ -141,7 +138,7 @@ fn encoder_progress_callback(
     _ = encoder;
     _ = self;
     std.debug.print(
-        "wrote {} bytes, {} samples, {}/{} frames\n",
+        "wrote {} bytes, {} samples, {}/{} frames\r",
         .{ bytes_written, samples_written, frames_written, total_frames_estimate }
     );
 }
