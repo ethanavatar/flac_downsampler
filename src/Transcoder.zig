@@ -18,10 +18,15 @@ const Options = struct {
 
 options: Options,
 
+allocator: std.mem.Allocator,
 decoder: *c.FLAC__StreamDecoder,
 encoder: *c.FLAC__StreamEncoder,
 
 chunk: ?[]c.FLAC__int32 = null,
+filtered_window: ?[][]c.FLAC__int32 = null,
+window: ?[][]c.FLAC__int32 = null,
+last_buffer: ?[][]c.FLAC__int32 = null,
+
 coefficients: []f64,
 
 pub fn init(allocator: std.mem.Allocator, options: Options) !Self {
@@ -50,12 +55,13 @@ pub fn init(allocator: std.mem.Allocator, options: Options) !Self {
     ok &= c.FLAC__stream_encoder_set_total_samples_estimate(encoder, stream_info.total_samples / 2);
     std.debug.assert(ok == c.true);
 
-
-    const taps = 63;
+    // TODO: Kaiser estimate to find number of taps
+    const taps = 200;
     const target_nyquist = target_sample_rate / 2;
     const coefficients = try designFirLowpassAlloc(allocator, taps, target_nyquist, source_sample_rate);
 
     return .{
+        .allocator = allocator,
         .options = options,
         .decoder = decoder.?,
         .encoder = encoder.?,
@@ -164,39 +170,67 @@ fn decoder_write_callback(
     client_data: ?*anyopaque
 ) callconv(.c) c.FLAC__StreamDecoderWriteStatus {
     const self: *Self = @alignCast(@ptrCast(client_data.?));
-
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-
-    const allocator = arena.allocator();
-
     const header = frame.*.header;
-
     const abort = c.FLAC__STREAM_DECODER_WRITE_STATUS_ABORT;
 
-    // TODO: move this into initialization and only allocate once
-    var chunk = allocator.alloc(c.FLAC__int32, header.blocksize) catch {
-        return c.FLAC__STREAM_DECODER_WRITE_STATUS_ABORT;
-    };
+    // Does the blocksize ever change? Like, maybe the very last frame is smaller?
 
     const channels: usize = 2; // TODO: Get from the source file
+    var have_last_buffer = true;
 
-    var filtered_buffer = allocator.alloc([]c.FLAC__int32, channels) catch return abort;
-    filtered_buffer[0] = allocator.alloc(c.FLAC__int32, header.blocksize) catch return abort;
-    filtered_buffer[1] = allocator.alloc(c.FLAC__int32, header.blocksize) catch return abort;
+    if (header.number.sample_number == 0) {
+        self.chunk = self.allocator.alloc(c.FLAC__int32, header.blocksize) catch return abort;
+        self.filtered_window = self.allocator.alloc([]c.FLAC__int32, channels) catch return abort;
+        self.filtered_window.?[0] = self.allocator.alloc(c.FLAC__int32, header.blocksize * 2) catch return abort;
+        self.filtered_window.?[1] = self.allocator.alloc(c.FLAC__int32, header.blocksize * 2) catch return abort;
+
+        // this should really be a circular buffer
+        self.window = self.allocator.alloc([]c.FLAC__int32, channels) catch return abort;
+        self.window.?[0] = self.allocator.alloc(c.FLAC__int32, header.blocksize * 2) catch return abort;
+        self.window.?[1] = self.allocator.alloc(c.FLAC__int32, header.blocksize * 2) catch return abort;
+
+        self.last_buffer = self.allocator.alloc([]c.FLAC__int32, channels) catch return abort;
+        self.last_buffer.?[0] = self.allocator.alloc(c.FLAC__int32, header.blocksize * 2) catch return abort;
+        self.last_buffer.?[1] = self.allocator.alloc(c.FLAC__int32, header.blocksize * 2) catch return abort;
+
+        have_last_buffer = false;
+    }
+
+    var chunk = self.chunk.?;
+    var filtered_window = self.filtered_window.?;
+    var window = self.window.?;
+
+    if (have_last_buffer) {
+        @memcpy(window[0][0..header.blocksize], self.last_buffer.?[0][0..header.blocksize]);
+        @memcpy(window[1][0..header.blocksize], self.last_buffer.?[1][0..header.blocksize]);
+        @memcpy(window[0][header.blocksize..header.blocksize*2], buffer[0][0..header.blocksize]);
+        @memcpy(window[1][header.blocksize..header.blocksize*2], buffer[1][0..header.blocksize]);
+    }
 
     for (0..channels) |channel| {
-        applyFirFilter(
-            buffer[channel][0..header.blocksize],
-            filtered_buffer[channel][0..header.blocksize],
-            self.coefficients
-        );
+        if (have_last_buffer) {
+            applyFirFilter(
+                window[channel][0..header.blocksize * 2],
+                filtered_window[channel][0..header.blocksize * 2],
+                self.coefficients
+            );
+        } else {
+            applyFirFilter(
+                buffer[channel][0..header.blocksize],
+                filtered_window[channel][0..header.blocksize],
+                self.coefficients
+            );
+        }
     }
 
     var filled: usize = 0;
     for (0..header.blocksize) |i| {
         if (i % 2 == 0) continue;
-        for (0..channels) |channel| chunk[filled * 2 + channel] = filtered_buffer[channel][i];
+        if (have_last_buffer) {
+            for (0..channels) |channel| chunk[filled * 2 + channel] = filtered_window[channel][i + header.blocksize];
+        } else {
+            for (0..channels) |channel| chunk[filled * 2 + channel] = filtered_window[channel][i];
+        }
         filled += 1;
     }
 
@@ -205,6 +239,9 @@ fn decoder_write_callback(
         @ptrCast(chunk),
         @intCast(filled)
     );
+
+    @memcpy(self.last_buffer.?[0][0..header.blocksize], buffer[0][0..header.blocksize]);
+    @memcpy(self.last_buffer.?[1][0..header.blocksize], buffer[1][0..header.blocksize]);
 
     return c.FLAC__STREAM_DECODER_WRITE_STATUS_CONTINUE;
 }
