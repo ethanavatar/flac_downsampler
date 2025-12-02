@@ -1,0 +1,4 @@
+*.flac
+**/*.flac
+zig-out/*
+.zig-cache/*
