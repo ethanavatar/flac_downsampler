@@ -400,34 +400,34 @@ fn getMetadataAlloc(
     return .{ stream_info.?, results.items };
 }
 
-fn printMetadata(file: []const u8) !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-
-    const allocator = arena.allocator();
-    _, const metadata = try getMetadataAlloc(allocator, file);
-
-    for (metadata) |block| {
-        switch (block.@"type") {
-            c.FLAC__METADATA_TYPE_STREAMINFO  => std.debug.print("{any}\n", .{ block.data.stream_info }),
-            c.FLAC__METADATA_TYPE_PADDING     => std.debug.print("{any}\n", .{ block.data.padding }),
-            c.FLAC__METADATA_TYPE_APPLICATION => std.debug.print("{any}\n", .{ block.data.application }),
-            c.FLAC__METADATA_TYPE_SEEKTABLE   => std.debug.print("{any}\n", .{ block.data.seek_table }),
-            c.FLAC__METADATA_TYPE_VORBIS_COMMENT => {
-                const s = block.data.vorbis_comment;
-                std.debug.print("{s}\n", .{ s.vendor_string.entry });
-
-                for (0..s.num_comments) |i| {
-                    const comment_slice = std.mem.span(s.comments[i].entry);
-                    const comment_ascii = try deunicode.deunicodeAlloc(allocator, comment_slice);
-                    std.debug.print("{s}\n", .{ comment_ascii });
-                }
-            },
-            c.FLAC__METADATA_TYPE_CUESHEET    => std.debug.print("{any}\n", .{ block.data.cue_sheet }),
-            c.FLAC__METADATA_TYPE_PICTURE     => std.debug.print("{any}\n", .{ block.data.picture }),
-            c.FLAC__METADATA_TYPE_UNDEFINED   => std.debug.print("{any}\n", .{ block.data.unknown }),
-            c.FLAC__MAX_METADATA_TYPE         => std.debug.print("<MAX>\n", .{ }),
-            else => unreachable,
-        }
-    }
-}
+//fn printMetadata(file: []const u8) !void {
+//    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+//    defer arena.deinit();
+//
+//    const allocator = arena.allocator();
+//    _, const metadata = try getMetadataAlloc(allocator, file);
+//
+//    for (metadata) |block| {
+//        switch (block.@"type") {
+//            c.FLAC__METADATA_TYPE_STREAMINFO  => std.debug.print("{any}\n", .{ block.data.stream_info }),
+//            c.FLAC__METADATA_TYPE_PADDING     => std.debug.print("{any}\n", .{ block.data.padding }),
+//            c.FLAC__METADATA_TYPE_APPLICATION => std.debug.print("{any}\n", .{ block.data.application }),
+//            c.FLAC__METADATA_TYPE_SEEKTABLE   => std.debug.print("{any}\n", .{ block.data.seek_table }),
+//            c.FLAC__METADATA_TYPE_VORBIS_COMMENT => {
+//                const s = block.data.vorbis_comment;
+//                std.debug.print("{s}\n", .{ s.vendor_string.entry });
+//
+//                for (0..s.num_comments) |i| {
+//                    const comment_slice = std.mem.span(s.comments[i].entry);
+//                    const comment_ascii = try deunicode.deunicodeAlloc(allocator, comment_slice);
+//                    std.debug.print("{s}\n", .{ comment_ascii });
+//                }
+//            },
+//            c.FLAC__METADATA_TYPE_CUESHEET    => std.debug.print("{any}\n", .{ block.data.cue_sheet }),
+//            c.FLAC__METADATA_TYPE_PICTURE     => std.debug.print("{any}\n", .{ block.data.picture }),
+//            c.FLAC__METADATA_TYPE_UNDEFINED   => std.debug.print("{any}\n", .{ block.data.unknown }),
+//            c.FLAC__MAX_METADATA_TYPE         => std.debug.print("<MAX>\n", .{ }),
+//            else => unreachable,
+//        }
+//    }
+//}
