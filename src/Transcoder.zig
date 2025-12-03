@@ -11,7 +11,8 @@ const c = @cImport({
 
 const Self = @This();
 
-const Options = struct {
+pub const Options = struct {
+    target_sample_rate: u32,
     in_file:  []const u8, 
     out_file: []const u8, 
 };
@@ -28,6 +29,7 @@ window: ?[][]c.FLAC__int32 = null,
 last_buffer: ?[][]c.FLAC__int32 = null,
 
 coefficients: []f64,
+decimate_factor: u32,
 
 pub fn init(allocator: std.mem.Allocator, options: Options) !Self {
     var ok = c.true;
@@ -44,21 +46,21 @@ pub fn init(allocator: std.mem.Allocator, options: Options) !Self {
     ok = c.FLAC__stream_encoder_set_metadata(encoder, @ptrCast(metadata), @intCast(metadata.len));
     std.debug.assert(ok == c.true);
 
-    const source_sample_rate = stream_info.sample_rate;
-    const target_sample_rate = stream_info.sample_rate / 2;
+    if (options.target_sample_rate > stream_info.sample_rate) @panic("upsampling not supported right now");
+    const decimate_factor = stream_info.sample_rate / options.target_sample_rate;
 
     ok &= c.FLAC__stream_encoder_set_verify(encoder, 1);
     ok &= c.FLAC__stream_encoder_set_compression_level(encoder, 4);
     ok &= c.FLAC__stream_encoder_set_channels(encoder, stream_info.channels);
     ok &= c.FLAC__stream_encoder_set_bits_per_sample(encoder, stream_info.bits_per_sample);
-    ok &= c.FLAC__stream_encoder_set_sample_rate(encoder, target_sample_rate);
+    ok &= c.FLAC__stream_encoder_set_sample_rate(encoder, options.target_sample_rate);
     ok &= c.FLAC__stream_encoder_set_total_samples_estimate(encoder, stream_info.total_samples / 2);
     std.debug.assert(ok == c.true);
 
     // TODO: Kaiser estimate to find number of taps
     const taps = 200;
-    const target_nyquist = target_sample_rate / 2;
-    const coefficients = try designFirLowpassAlloc(allocator, taps, target_nyquist, source_sample_rate);
+    const target_nyquist = options.target_sample_rate / 2;
+    const coefficients = try designFirLowpassAlloc(allocator, taps, target_nyquist, stream_info.sample_rate);
 
     return .{
         .allocator = allocator,
@@ -66,6 +68,7 @@ pub fn init(allocator: std.mem.Allocator, options: Options) !Self {
         .decoder = decoder.?,
         .encoder = encoder.?,
         .coefficients = coefficients,
+        .decimate_factor = decimate_factor,
     };
 }
 
@@ -224,12 +227,16 @@ fn decoder_write_callback(
     }
 
     var filled: usize = 0;
+    var timer: usize = 0;
     for (0..header.blocksize) |i| {
-        if (i % 2 == 0) continue;
+        timer += 1;
+        if (timer != self.decimate_factor) continue;
+        timer = 0;
+
         if (have_last_buffer) {
-            for (0..channels) |channel| chunk[filled * 2 + channel] = filtered_window[channel][i + header.blocksize];
+            for (0..channels) |channel| chunk[filled * channels + channel] = filtered_window[channel][i + header.blocksize];
         } else {
-            for (0..channels) |channel| chunk[filled * 2 + channel] = filtered_window[channel][i];
+            for (0..channels) |channel| chunk[filled * channels + channel] = filtered_window[channel][i];
         }
         filled += 1;
     }
