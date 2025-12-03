@@ -22,7 +22,7 @@ $ flac_downsampler.exe 48000 "Equus Caballus - 08 Where I Sit.flac" "[48kHz] Equ
 
 ## Building
 
-I integrated building libFLAC into the [build.zig](./build.zig), bypassing libFLAC's own CMake configuration. Though, I did not do a very thorough porting job. The config I made for building libFLAC only Windows x64 in mind, so you'll need to tweak the generated header if you're on another platform.
+I integrated building libFLAC into the [build.zig](./build.zig), bypassing libFLAC's own CMake configuration, though, I did not do a very thorough porting job. The config I made for building libFLAC only has Windows x64 in mind, so you'll need to tweak the generated header if you're on another platform.
 
 But otherwise, building is as simple as:
 
