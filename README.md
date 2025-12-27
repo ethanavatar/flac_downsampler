@@ -1,3 +1,6 @@
+Moved to [Codeberg](https://codeberg.org/Toriatama/flac_downsampler)
+
+
 # FLAC Downsampler
 
 A command line tool to downsample FLAC files.
@@ -37,4 +40,5 @@ $ zig build -Doptimize=ReleaseSafe
 $ .\zig-out\bin\flac_downsampler.exe
 Usage: flac_downsampler.exe [SAMPLE_RATE] [INPUT_FILE] [OUTPUT_FILE]
 ```
+
 
